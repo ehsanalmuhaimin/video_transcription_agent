@@ -1,0 +1,12 @@
+# Virtual environment
+.venv/
+
+# Environment variables / Secrets
+.env
+
+# Python caching
+**/__pycache__/
+*.pyc
+
+# Local runtime configuration
+.python-version
