@@ -56,12 +56,12 @@ def generate_title(transcript:str)-> str:
     
     title_prompt = (
         RunnablePassthrough() | RunnableLambda(lambda x: {"text": x}) | ChatPromptTemplate.from_messages(
-            ("system",
+            [("system",
              "Based on the meeting transcript , generate a short professional meeting title"
              "(max 8 words). Only return the title, nopthing else"
              ),
             ("human", "{text}")
-        ) | llm | StrOutputParser()
+        ]) | llm | StrOutputParser()
     )
 
     return title_prompt.invoke(transcript[:2000])
