@@ -1,4 +1,5 @@
 import os
+import shutil
 from dotenv import load_dotenv
 from utils.audio_processor import process_input
 from core.transcriber import transcribe_all
@@ -11,10 +12,9 @@ load_dotenv()
 def run_pipeline(source: str, language: str = "english") -> dict:
     print("\n🚀 Starting AI Video Assistant Pipeline...")
 
+    # Processes your audio chunks (now optimized at your preferred 4-5 minute chunk size!)
     chunks = process_input(source)
 
-    # Fixed: Match parameter structure of your transcribe_all function
-    # Setting translate=True if the user chose hinglish to force English output, else False
     should_translate = True if language.lower() == "hinglish" else False
     transcript = transcribe_all(chunks, translate=should_translate)
     
@@ -26,6 +26,7 @@ def run_pipeline(source: str, language: str = "english") -> dict:
     decisions = extract_key_decisions(transcript)
     questions = extract_questions(transcript)
     
+    # This automatically triggers your new build_vector_store inside rag_engine in RAM
     rag_chain = build_rag_chain(transcript)
 
     return {
@@ -38,8 +39,21 @@ def run_pipeline(source: str, language: str = "english") -> dict:
         "rag_chain": rag_chain,
     }
 
+def pipeline_reset_workspace():
+    """
+    Unified cleanup handle exposed to UI layers.
+    Since Chroma runs entirely in RAM now, we don't have disk files to lock up.
+    We just clean up any local temporary video/audio files left behind by downloads.
+    """
+    temp_dir = "./temp"
+    if os.path.exists(temp_dir):
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            print("Temporary media cache cleared safely.")
+        except Exception as e:
+            print(f"Non-critical workspace reset warning: {e}")
+
 if __name__ == "__main__":
-    # CLI entry point
     source = input("Enter YouTube URL or local file path: ").strip()
     language = input("Language (english/hinglish) [default: english]: ").strip() or "english"
     
@@ -53,7 +67,6 @@ if __name__ == "__main__":
     print(f"\n❓ Open Questions:\n{result['open_questions']}")
     print("=" * 60)
 
-    # Phase 2 — Chat with your meeting via RAG
     print("\n💬 Chat with your meeting (type 'exit' to quit)\n")
     rag_chain = result["rag_chain"]
     while True:
@@ -64,6 +77,5 @@ if __name__ == "__main__":
         if not question:
             continue
         
-        # Fixed: Removed duplicate printing since ask_question handles terminal prints internally
         print("\n🤖 Assistant is thinking...")
         ask_question(rag_chain, question)

@@ -1,70 +1,50 @@
-import os 
-import shutil
-from pathlib import Path
 from langchain_chroma import Chroma 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
-CHROMA_DIR = "vector_db"
 COLLECTION_NAME = "meeting_transcript"
-EMBEDDING_MODEL  = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 def get_embeddings():
+    """Loads the local HuggingFace embedding model."""
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         model_kwargs={"device": 'cpu'}
     )
 
-def clear_vector_store():
-    """Wipes the local vector directory completely to eliminate cross-video memory leaks."""
-    db_path = Path(CHROMA_DIR)
-    if db_path.exists():
-        print("Clearing old vector database memory...")
-        try:
-            # Safely recursively delete the old database folder
-            shutil.rmtree(db_path)
-            print("Old memory cleared successfully.")
-        except Exception as e:
-            print(f"Warning: Could not clear database folder automatically: {e}")
-
 def build_vector_store(transcript: str) -> Chroma:
-    # FIXED: Wipes any existing database records before building the new video context
-    clear_vector_store()
+    """
+    Builds a fresh, 100% IN-MEMORY vector database.
+    This eliminates all SQLite file lock (1032) and OS permission errors.
+    """
+    print("Building fresh in-memory vector store for current video...")
     
-    print("Building fresh vector store for current video...")
+    # 1. Split the text into manageable chunks
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=50
     )
     chunks = splitter.split_text(transcript)
 
+    # 2. Convert text chunks into LangChain Documents
     docs = [
         Document(page_content=chunk, metadata={'chunk_index': i})
         for i, chunk in enumerate(chunks)
     ]
 
-    embeddings = get_embeddings()
-    
+    # 3. Initialize Chroma completely in RAM (Notice: NO persist_directory)
+    # Every time this function is called, it creates a fresh, isolated database block in memory.
     vector_store = Chroma.from_documents(
         documents=docs,
-        embedding=embeddings,
-        collection_name=COLLECTION_NAME,
-        persist_directory=CHROMA_DIR
+        embedding=get_embeddings(),
+        collection_name=COLLECTION_NAME
     )
-    return vector_store
-
-def load_vector_store() -> Chroma:
-    embeddings = get_embeddings()
     
-    vector_store = Chroma(
-        collection_name=COLLECTION_NAME,
-        embedding_function=embeddings,
-        persist_directory=CHROMA_DIR
-    )
     return vector_store
 
 def get_retriever(vector_store: Chroma, k: int = 4):
+    """Converts the vector store into a retriever for the RAG chain."""
     return vector_store.as_retriever(
         search_type='similarity',
         search_kwargs={"k": k}

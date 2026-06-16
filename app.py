@@ -4,24 +4,37 @@ from pathlib import Path
 from fpdf import FPDF
 from datetime import datetime
 
-# Import backend logic
-from main import run_pipeline
+# Import backend logic handles securely
+from main import run_pipeline, pipeline_reset_workspace
 from core.rag_engine import ask_question
 
-# --- UTILITY: PDF GENERATOR ---
+# --- UTILITY: PDF GENERATOR (SANITIZED & ROBUST) ---
+def clean_pdf_text(text):
+    if not text:
+        return ""
+    replacements = {
+        "“": '"', "”": '"',
+        "‘": "'", "’": "'",
+        "—": "-", "–": "-",
+        "•": "*", "…": "..."
+    }
+    for bad_char, good_char in replacements.items():
+        text = text.replace(bad_char, good_char)
+    return text.encode('latin-1', 'ignore').decode('latin-1')
+
 class PDFReport(FPDF):
     def header(self):
-        self.set_font('Arial', 'B', 12)
-        self.cell(0, 10, 'AI Meeting Insight Report', 0, 1, 'C')
+        self.set_font('Helvetica', 'B', 12)
+        self.cell(0, 10, 'AI Meeting Insight Report', ln=1, align='C')
 
     def chapter_title(self, title):
-        self.set_font('Arial', 'B', 12)
+        self.set_font('Helvetica', 'B', 12)
         self.set_fill_color(200, 220, 255)
-        self.cell(0, 10, title, 0, 1, 'L', 1)
+        self.cell(0, 10, title, ln=1, align='L', fill=True)
         self.ln(4)
 
     def chapter_body(self, body):
-        self.set_font('Arial', '', 11)
+        self.set_font('Helvetica', '', 11)
         self.multi_cell(0, 10, body)
         self.ln()
 
@@ -29,28 +42,24 @@ def generate_pdf(res):
     pdf = PDFReport()
     pdf.add_page()
     
-    # Title
-    pdf.set_font('Arial', 'B', 16)
-    pdf.multi_cell(0, 10, f"Video Title: {res['title']}")
+    pdf.set_font('Helvetica', 'B', 16)
+    cleaned_title = clean_pdf_text(res.get('title', 'Meeting Report'))
+    pdf.multi_cell(0, 10, f"Video Title: {cleaned_title}")
     pdf.ln(10)
     
-    # Summary
     pdf.chapter_title("Executive Summary")
-    pdf.chapter_body(res['summary'])
+    pdf.chapter_body(clean_pdf_text(res.get('summary', '')))
     
-    # Action Items
     pdf.chapter_title("Action Items")
-    pdf.chapter_body(res['action_items'])
+    pdf.chapter_body(clean_pdf_text(res.get('action_items', '')))
     
-    # Decisions
     pdf.chapter_title("Key Decisions")
-    pdf.chapter_body(res['key_decisions'])
+    pdf.chapter_body(clean_pdf_text(res.get('key_decisions', '')))
     
-    # Questions
     pdf.chapter_title("Open Questions")
-    pdf.chapter_body(res['open_questions'])
+    pdf.chapter_body(clean_pdf_text(res.get('open_questions', '')))
     
-    return pdf.output(dest='S').encode('latin-1')
+    return bytes(pdf.output())
 
 def generate_chat_log(history):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -60,16 +69,33 @@ def generate_chat_log(history):
     return log_text
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="AI Video Agent Pro", page_icon="⚡", layout="wide")
+st.set_page_config(
+    page_title="AI Video Agent Pro", 
+    page_icon="⚡", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Custom CSS to hide default Streamlit clutter
-st.markdown("""
-<style>
-    .block-container {padding-top: 1.5rem; padding-bottom: 3rem;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
+# --- SESSION STATE INITIALIZATION ---
+if "pipeline_results" not in st.session_state:
+    st.session_state.pipeline_results = None
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "chat_paused" not in st.session_state:
+    st.session_state.chat_paused = False
+
+# --- UNIFIED WORKSPACE MASTER RESET CONTROL ---
+def master_reset_agent():
+    """Wipes vector db storage blocks and cleans app state memory completely."""
+    st.session_state.pipeline_results = None
+    st.session_state.chat_history = []
+    st.session_state.chat_paused = False
+    
+    try:
+        pipeline_reset_workspace()
+        st.toast("Database & workspace successfully cleared!", icon="🧼")
+    except Exception as e:
+        st.sidebar.error(f"Storage clearance failed: {e}")
 
 # --- SIDEBAR CONFIGURATION ---
 with st.sidebar:
@@ -87,48 +113,41 @@ with st.sidebar:
     
     process_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
     
+    st.button("🧼 Reset Workspace / Clear Locks", type="secondary", use_container_width=True, on_click=master_reset_agent)
+    
+    st.markdown("---")
     st.markdown("##### System Status")
-    if "pipeline_results" in st.session_state and st.session_state.pipeline_results:
+    if st.session_state.pipeline_results:
         st.success("System: Ready")
     else:
         st.info("System: Idle")
-
-# --- SESSION STATE INITIALIZATION ---
-if "pipeline_results" not in st.session_state:
-    st.session_state.pipeline_results = None
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "chat_paused" not in st.session_state:
-    st.session_state.chat_paused = False
 
 # --- MAIN LOGIC PIPELINE ---
 if process_btn:
     if not source_input.strip():
         st.toast("⚠️ Please enter a valid URL or path", icon="⚠️")
     else:
-        # Cross-platform path handling for local files
         final_source = source_input.strip()
         if not final_source.startswith(("http://", "https://")):
             final_source = str(Path(final_source).absolute())
 
         with st.spinner("🔄 Downloading, Transcribing, and analyzing... this may take a moment."):
             try:
-                # Run the backend
                 st.session_state.pipeline_results = run_pipeline(final_source, language_input)
-                st.session_state.chat_history = [] # Reset memory
+                st.session_state.chat_history = [] 
                 st.session_state.chat_paused = False
                 st.toast("Analysis Complete!", icon="✅")
+                st.rerun()
             except Exception as e:
                 st.error(f"Critical Pipeline Error: {e}")
+                st.info("💡 Action Required: Click the 'Reset Workspace / Clear Locks' button above to release locked database processes.")
 
 # --- DASHBOARD LAYOUT ---
 if st.session_state.pipeline_results:
     res = st.session_state.pipeline_results
     
-    # 1. Header Section
     st.markdown(f"## 🎬 {res['title']}")
     
-    # Quick Metrics Row
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Processing Time", "Done")
     m2.metric("Language", language_input.title())
@@ -137,7 +156,6 @@ if st.session_state.pipeline_results:
     
     st.markdown("---")
 
-    # 2. Split View: Insights vs Chat
     col_insights, col_chat = st.columns([1.2, 1])
 
     # --- LEFT COLUMN: INSIGHTS & EXPORTS ---
@@ -161,7 +179,6 @@ if st.session_state.pipeline_results:
         st.markdown("---")
         st.markdown("### 📥 Export Reports")
         
-        # PDF Generation Button
         pdf_bytes = generate_pdf(res)
         st.download_button(
             label="📄 Download Full PDF Report",
@@ -175,17 +192,15 @@ if st.session_state.pipeline_results:
     with col_chat:
         st.subheader("🤖 AI Assistant")
         
-        # Chat Control Toolbar
         c1, c2, c3 = st.columns([1,1,1])
-        if c1.button("🧹 Clear", use_container_width=True):
-            st.session_state.chat_history = []
+        if c1.button("🧼 Clear All", use_container_width=True):
+            master_reset_agent()
             st.rerun()
             
         if c2.button("⏸️ Pause", use_container_width=True):
             st.session_state.chat_paused = not st.session_state.chat_paused
             st.rerun()
 
-        # Chat History Export
         chat_log = generate_chat_log(st.session_state.chat_history)
         c3.download_button(
             "💾 Save", 
@@ -195,13 +210,11 @@ if st.session_state.pipeline_results:
             use_container_width=True
         )
 
-        # Status Indicator
         if st.session_state.chat_paused:
             st.warning("🔴 Chat is currently PAUSED. Unpause to resume.")
         else:
             st.caption("🟢 Chat is ACTIVE. Ask specific questions about the video.")
 
-        # Chat Container (Scrollable)
         chat_container = st.container(height=500)
         
         with chat_container:
@@ -212,28 +225,28 @@ if st.session_state.pipeline_results:
                 with st.chat_message(role):
                     st.write(text)
 
-        # Chat Input
         if not st.session_state.chat_paused:
             if user_query := st.chat_input("Ask a question..."):
-                # Append user message
+                # 1. Immediately append and render user query locally
                 st.session_state.chat_history.append(("user", user_query))
                 with chat_container:
                     with st.chat_message("user"):
                         st.write(user_query)
 
-                # Process AI Response
+                # 2. Extract the RAG chain safely from state context
+                current_rag_chain = st.session_state.pipeline_results['rag_chain']
+
+                # 3. Generate and append assistant response without losing context handles
                 with chat_container:
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
-                            answer = ask_question(res['rag_chain'], user_query)
+                            answer = ask_question(current_rag_chain, user_query)
                             st.write(answer)
                 
-                # Append AI message
                 st.session_state.chat_history.append(("assistant", answer))
                 st.rerun()
 
 else:
-    # Empty State - Hero Section
     st.markdown("""
     <div style='text-align: center; padding-top: 50px;'>
         <h1>👋 Welcome to Video Agent Pro</h1>

@@ -43,7 +43,7 @@ def convert_to_wav(input_path: str) -> str:
     audio.export(str(output_path), format="wav")
     return str(output_path.absolute())
 
-def chunk_audio(wav_path: str, chunk_minutes: int = 10) -> list:
+def chunk_audio(wav_path: str, chunk_minutes: int = 4) -> list:
     """Chunks long audio files dynamically inside the local downloads cache folder."""
     file_path = Path(wav_path).absolute()
     audio = AudioSegment.from_wav(str(file_path))
@@ -77,5 +77,3 @@ def process_input(source: str) -> list:
     print(f"Audio ready — {len(chunks)} chunk(s) created.")
     return chunks
 
-
-print(process_input("/home/ehsan-al-muhaimin/Videos/Tanvir_Ishtiaq23141010.mp4"))
